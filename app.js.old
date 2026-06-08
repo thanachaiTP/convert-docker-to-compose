@@ -1,0 +1,150 @@
+document.addEventListener('DOMContentLoaded', () => {
+    const runInput = document.getElementById('dockerRunInput');
+    const composeOutput = document.getElementById('composeOutput');
+    const copyBtn = document.getElementById('copyBtn');
+    const copyText = document.getElementById('copyText');
+
+    // Options Elements
+    const enableLogLimit = document.getElementById('enableLogLimit');
+    const logOptions = document.getElementById('logOptions');
+    const logMaxSize = document.getElementById('logMaxSize');
+    const logMaxFile = document.getElementById('logMaxFile');
+
+    const enableResourceLimit = document.getElementById('enableResourceLimit');
+    const resourceOptions = document.getElementById('resourceOptions');
+    const cpuLimit = document.getElementById('cpuLimit');
+    const memLimit = document.getElementById('memLimit');
+
+    // Toggle options UI visibility
+    enableLogLimit.addEventListener('change', (e) => {
+        logOptions.style.opacity = e.target.checked ? '1' : '0.5';
+        logOptions.style.pointerEvents = e.target.checked ? 'auto' : 'none';
+        generateCompose();
+    });
+
+    enableResourceLimit.addEventListener('change', (e) => {
+        resourceOptions.style.opacity = e.target.checked ? '1' : '0.5';
+        resourceOptions.style.pointerEvents = e.target.checked ? 'auto' : 'none';
+        generateCompose();
+    });
+
+    // Event listeners for inputs
+    [runInput, logMaxSize, logMaxFile, cpuLimit, memLimit].forEach(el => {
+        el.addEventListener('input', generateCompose);
+    });
+
+    function generateCompose() {
+        const rawInput = runInput.value.trim();
+        if (!rawInput) {
+            composeOutput.textContent = "# ผลลัพธ์จะแสดงที่นี่...";
+            return;
+        }
+
+        // ลบบรรทัดใหม่ (\) กรณีเป็นคำสั่งหลายบรรทัด
+        const cleanInput = rawInput.replace(/\\\n/g, ' ').replace(/\s+/g, ' ');
+        
+        // ตรวจสอบเบื้องต้นว่าเป็นคำสั่ง docker run หรือไม่
+        if (!cleanInput.startsWith('docker run')) {
+            composeOutput.textContent = "# Error: คำสั่งต้องเริ่มต้นด้วย 'docker run'";
+            return;
+        }
+
+        // ดึง Arguments แบบคร่าวๆ (Regex สำหรับแกะคำสั่งพื้นฐาน)
+        const nameMatch = cleanInput.match(/--name\s+([^\s]+)/);
+        const serviceName = nameMatch ? nameMatch[1] : 'web_service';
+        
+        // ดึง Ports (-p หรือ --publish)
+        const portMatches = [...cleanInput.matchAll(/(?:-p|--publish)\s+([^\s]+)/g)];
+        const ports = portMatches.map(m => m[1]);
+
+        // ดึง Environment Variables (-e หรือ --env)
+        const envMatches = [...cleanInput.matchAll(/(?:-e|--env)\s+([^\s]+)/g)];
+        const envs = envMatches.map(m => m[1]);
+
+        // ดึง Volumes (-v หรือ --volume)
+        const volMatches = [...cleanInput.matchAll(/(?:-v|--volume)\s+([^\s]+)/g)];
+        const volumes = volMatches.map(m => m[1]);
+
+        // ดึง Image (ปกติจะเป็นคำขวัญสุดท้ายหลังหักล้างพวก options ออกหมดแล้ว)
+        // เพื่อความง่ายในการทำ Client-side เผื่อตัวเลือกซับซ้อน เราจะล้าง Arguments ออกเพื่อหา Image ตัวท้าย
+        let words = cleanInput.split(' ');
+        let image = 'nginx:latest'; // default fallback
+        
+        // ค้นหาคำสุดท้ายที่ไม่ใช่ Option และไม่ใช่ค่าของ Option
+        for (let i = words.length - 1; i >= 0; i--) {
+            if (words[i] && !words[i].startsWith('-') && i > 1 && !words[i-1].startsWith('-')) {
+                image = words[i];
+                break;
+            }
+        }
+
+        // --- เริ่มสร้างโครงสร้าง YAML ---
+        let yaml = `version: "3.8"\n\nservices:\n  ${serviceName}:\n    image: ${image}\n`;
+
+        // เพิ่ม Restart policy
+        if (cleanInput.includes('--restart')) {
+            const restartMatch = cleanInput.match(/--restart\s+([^\s]+)/);
+            if (restartMatch) yaml += `    restart: ${restartMatch[1]}\n`;
+        } else {
+            yaml += `    restart: always\n`;
+        }
+
+        // เพิ่ม Ports
+        if (ports.length > 0) {
+            yaml += `    ports:\n`;
+            ports.forEach(p => {
+                // ครอบเครื่องหมายคำพูดหากจำเป็น
+                yaml += `      - "${p}"\n`;
+            });
+        }
+
+        // เพิ่ม Environment Variables
+        if (envs.length > 0) {
+            yaml += `    environment:\n`;
+            envs.forEach(e => {
+                yaml += `      - ${e}\n`;
+            });
+        }
+
+        // เพิ่ม Volumes
+        if (volumes.length > 0) {
+            yaml += `    volumes:\n`;
+            volumes.forEach(v => {
+                yaml += `      - ${v}\n`;
+            });
+        }
+
+        // ฟีเจอร์เพิ่มเติม: Logging Limit
+        if (enableLogLimit.checked) {
+            yaml += `    logging:\n`;
+            yaml += `      driver: "json-file"\n`;
+            yaml += `      options:\n`;
+            yaml += `        max-size: "${logMaxSize.value}"\n`;
+            yaml += `        max-file: "${logMaxFile.value}"\n`;
+        }
+
+        // ฟีเจอร์เพิ่มเติม: Resource Limits (Docker Compose v3)
+        if (enableResourceLimit.checked) {
+            yaml += `    deploy:\n`;
+            yaml += `      resources:\n`;
+            yaml += `        limits:\n`;
+            if (cpuLimit.value) yaml += `          cpus: '${cpuLimit.value}'\n`;
+            if (memLimit.value) yaml += `          memory: ${memLimit.value}\n`;
+        }
+
+        composeOutput.textContent = yaml;
+    }
+
+    // ฟังก์ชัน Copy คำสั่ง
+    copyBtn.addEventListener('click', () => {
+        const textToCopy = composeOutput.textContent;
+        if (textToCopy && !textToCopy.startsWith('#')) {
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                copyText.textContent = 'Copied!';
+                setTimeout(() => {
+                    copyText.textContent = 'Copy';
+                }, 2000);
+            });
+        }
+    });
+});

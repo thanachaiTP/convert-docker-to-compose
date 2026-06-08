@@ -1,0 +1,12 @@
+services:
+  composerize:
+    build: .
+    container_name: docker-composerize
+    ports:
+      - "8080:80"
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "1"
